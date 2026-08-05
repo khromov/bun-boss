@@ -162,6 +162,94 @@ function normalizeResult (result: any): { rows: any[] } {
   return { rows: [...result] }
 }
 
+// Bun 1.3.x hands a pooled connection to a waiting query in the window between a transaction block
+// failing and the ROLLBACK that clears its aborted state, so an unrelated query fails with 25P02.
+// Reserving does not help — the leak is inside the pool the reserved connection came from. Nothing
+// can be handed the aborted connection if nothing else is in flight, so transaction blocks take
+// this gate exclusively and every other query shares it.
+//
+// The cost is real and lands on the blocks: schema install, migrations and the locked() maintenance
+// the supervisor runs every superviseIntervalSeconds each stall the instance's other queries for
+// their duration, up to the 30s lock_timeout those blocks set. It is per-client, so it does not
+// coordinate across processes — it does not need to, because the leak is inside one pool.
+interface Gate {
+  read<T>(fn: () => Promise<T>): Promise<T>
+  write<T>(fn: () => Promise<T>): Promise<T>
+}
+
+// FIFO, and every state transition is synchronous — a lock built out of chained promises lets a
+// reader that is already past its await slip in alongside a writer, which defeats the point.
+function createGate (): Gate {
+  const waiting: Array<{ exclusive: boolean, admit: () => void }> = []
+  let readers = 0
+  let writing = false
+
+  function admitNext (): void {
+    while (waiting.length > 0) {
+      const next = waiting[0]
+
+      if (next.exclusive ? (writing || readers > 0) : writing) {
+        return
+      }
+
+      waiting.shift()
+
+      if (next.exclusive) {
+        writing = true
+      } else {
+        readers++
+      }
+
+      next.admit()
+    }
+  }
+
+  function acquire (exclusive: boolean): Promise<void> {
+    return new Promise<void>(resolve => {
+      waiting.push({ exclusive, admit: resolve })
+      admitNext()
+    })
+  }
+
+  function release (exclusive: boolean): void {
+    if (exclusive) {
+      writing = false
+    } else {
+      readers--
+    }
+
+    admitNext()
+  }
+
+  async function run<T> (exclusive: boolean, fn: () => Promise<T>): Promise<T> {
+    await acquire(exclusive)
+
+    try {
+      return await fn()
+    } finally {
+      release(exclusive)
+    }
+  }
+
+  return {
+    read: fn => run(false, fn),
+    write: fn => run(true, fn)
+  }
+}
+
+const gates = new WeakMap<BunSqlLike, Gate>()
+
+function getGate (sql: BunSqlLike): Gate {
+  let gate = gates.get(sql)
+
+  if (!gate) {
+    gate = createGate()
+    gates.set(sql, gate)
+  }
+
+  return gate
+}
+
 async function executeReserved (sql: BunSqlLike, text: string): Promise<any> {
   const reserved = await sql.reserve!()
 
@@ -211,16 +299,19 @@ export function fromBunSql (sql: BunSqlLike): IDatabase {
         // Only the simple protocol accepts the multi-statement blocks below, and pg-boss only ever
         // sends those without parameters — the same split fromPglite makes between query and exec.
         if (values?.length) {
-          return normalizeResult(await sql.unsafe(query, toBunParams(values, jsonParams)))
+          return await getGate(sql).read(async () =>
+            normalizeResult(await sql.unsafe(query, toBunParams(values, jsonParams))))
         }
 
         if (!isPooled(sql)) {
           return normalizeResult(await sql.unsafe(query))
         }
 
+        const gate = getGate(sql)
+
         if (!TRANSACTION_REGEX.test(query)) {
           try {
-            return normalizeResult(await sql.unsafe(query))
+            return await gate.read(async () => normalizeResult(await sql.unsafe(query)))
           } catch (err: any) {
             // Backstop for anything bun rejects that the check above did not anticipate. Bun rejects
             // before running any of the statement, so replaying it on a pinned connection is safe.
@@ -230,7 +321,7 @@ export function fromBunSql (sql: BunSqlLike): IDatabase {
           }
         }
 
-        return normalizeResult(await executeReserved(sql, query))
+        return await gate.write(async () => normalizeResult(await executeReserved(sql, query)))
       } catch (err) {
         throw promoteSqlState(err)
       }
