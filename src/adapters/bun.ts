@@ -9,6 +9,8 @@ export interface BunSqlLike {
   // All three handles expose `reserve`; `release` and `savepoint` are what tell them apart. The
   // adapter only reads them to identify the pool — it never calls either. See isPooled below.
   reserve?(): Promise<BunReservedLike>
+  /** Runs a callback inside a transaction bun opens, commits and rolls back itself. */
+  begin?<T>(fn: (tx: BunSqlLike) => Promise<T>): Promise<T>
   /** Present only on a reserved connection. */
   release?: unknown
   /** Present only on a `sql.begin()` transaction or savepoint scope. */
@@ -177,6 +179,38 @@ async function executeReserved (sql: BunSqlLike, text: string): Promise<any> {
   }
 }
 
+// Splits a pg-boss transaction block into the body bun should run inside its own transaction and
+// whatever trails the COMMIT. plans.transaction() always emits `BEGIN; … COMMIT;`, and
+// migrationStore appends the CONCURRENTLY index builds after it — those must stay outside, since
+// CREATE INDEX CONCURRENTLY cannot run in a transaction block. Greedy, so it splits on the last
+// COMMIT; neither plans.ts nor migrationStore.ts contains a plpgsql body that could hide one.
+const TRANSACTION_BLOCK_REGEX = /^\s*BEGIN;([\s\S]*)\bCOMMIT;([\s\S]*)$/i
+
+// Bun 1.3.x hands a pooled connection to a waiting query in the window between a transaction block
+// failing and the ROLLBACK that clears its aborted state, so an unrelated query fails with 25P02.
+// Reserving does not help — the leak is inside the pool the reserved connection came from. Handing
+// the transaction to bun instead of writing BEGIN/COMMIT ourselves lets it do its own cleanup on
+// the connection it owns, which closes the window.
+async function executeTransaction (sql: BunSqlLike, text: string): Promise<{ rows: any[] }> {
+  const block = TRANSACTION_BLOCK_REGEX.exec(text)
+
+  if (!block || typeof sql.begin !== 'function') {
+    return normalizeResult(await executeReserved(sql, text))
+  }
+
+  const [, body, trailing] = block
+
+  const { rows } = normalizeResult(await sql.begin(tx => tx.unsafe(body)))
+
+  if (!trailing.trim()) {
+    return { rows }
+  }
+
+  const after = normalizeResult(await sql.unsafe(trailing))
+
+  return { rows: [...rows, ...after.rows] }
+}
+
 /**
  * Adapts Bun's built-in SQL client to pg-boss's {@link IDatabase}.
  *
@@ -230,7 +264,7 @@ export function fromBunSql (sql: BunSqlLike): IDatabase {
           }
         }
 
-        return normalizeResult(await executeReserved(sql, query))
+        return await executeTransaction(sql, query)
       } catch (err) {
         throw promoteSqlState(err)
       }
