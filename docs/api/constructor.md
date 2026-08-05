@@ -2,7 +2,7 @@
 
 ### `new(connectionString)`
 
-Passing a string argument to the constructor implies a PostgreSQL connection string in one of the formats specified by the [pg](https://github.com/brianc/node-postgres) package.  Some examples are currently posted in the [pg docs](https://github.com/brianc/node-postgres/wiki/pg).
+Passing a string argument to the constructor implies a PostgreSQL connection string in one of the formats specified by the [pg](https://github.com/brianc/node-postgres) package, which backs the default connection pool.  Some examples are currently posted in the [pg docs](https://github.com/brianc/node-postgres/wiki/pg). To drive pg-boss through Bun's built-in `SQL` client instead of the `pg` pool, pass a `db` adapter built with [`fromBunSql`](./adapters.md#bun) rather than a connection string.
 
 ```js
 const boss = new PgBoss('postgres://user:pass@host:port/database?ssl=require');
