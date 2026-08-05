@@ -69,3 +69,44 @@ Utility function to get the database schema version.
 const version = await boss.schemaVersion()
 // 37
 ```
+
+### `isMaintaining()`
+
+Returns `true` while the background supervisor is mid-cycle (monitoring backlogs, failing timed-out
+jobs, and running maintenance). Useful for tests or graceful-shutdown coordination.
+
+```js
+const busy = boss.isMaintaining()
+// false
+```
+
+### `isResolvingFlow()`
+
+Returns `true` while the background flow resolver is mid-pass unblocking dependent jobs (see the
+[`flow`](./events.md#flow) event). Flow resolution runs off the completion hot path.
+
+```js
+const busy = boss.isResolvingFlow()
+// false
+```
+
+### `isCheckingSkew()`
+
+Returns `true` while the scheduler is mid-check comparing the database clock against the local clock
+(the source of the `clock_skew` [`warning`](./events.md#warning)).
+
+```js
+const busy = boss.isCheckingSkew()
+// false
+```
+
+### `getDb()`
+
+Returns the `Db` (the `executeSql` interface) this instance runs against — the built-in pool, a `db`
+adapter you supplied, or a freshly constructed default pool. Handy for issuing your own SQL through
+the same connection pg-boss uses.
+
+```js
+const db = boss.getDb()
+const { rows } = await db.executeSql('SELECT 1 as ok')
+```

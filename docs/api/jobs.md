@@ -459,8 +459,9 @@ before being dead-lettered. These are `null` for jobs that were not dead-lettere
 The following example shows how to fetch and delete up to 20 jobs.
 
 ```js
+import emailer from './emailer.js'
+
 const QUEUE = 'email-daily-digest'
-const emailer = require('./emailer.js')
 
 const jobs = await boss.fetch(QUEUE, { batchSize: 20 })
 

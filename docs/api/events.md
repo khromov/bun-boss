@@ -3,9 +3,9 @@
 Each pg-boss instance is an EventEmitter, and contains the following events.
 
 ## `error`
-The `error` event could be raised during internal processing, such as scheduling and maintenance. Adding a listener to the error event is strongly encouraged because of the default behavior of Node.
+The `error` event could be raised during internal processing, such as scheduling and maintenance. Adding a listener to the error event is strongly encouraged because of the default `EventEmitter` behavior the runtime follows (Bun implements `node:events` with the same semantics as Node.js).
 
-> If an EventEmitter does not have at least one listener registered for the 'error' event, and an 'error' event is emitted, the error is thrown, a stack trace is printed, and the Node.js process exits.
+> If an EventEmitter does not have at least one listener registered for the 'error' event, and an 'error' event is emitted, the error is thrown, a stack trace is printed, and the process exits.
 >
 >Source: [Node.js Events > Error Events](https://nodejs.org/api/events.html#events_error_events)
 

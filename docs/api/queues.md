@@ -197,7 +197,7 @@ Returns the current queue-depth counts as a single-element array (newest first).
 * `failedCount` — failed jobs still retained in the table (bounded by the queue's retention policy, so this is a rolling count of recent failures rather than an all-time total)
 * `totalCount` — all jobs currently stored for the queue
 
-By default the counts are served from the cache on the queue table (refreshed every `monitorIntervalSeconds`), so the value can be up to one monitor interval stale. Pass `{ force: true }` to re-count directly from the job table and update the values on the queue table, but even this option is rate-limited to once a minute, so repeated calls using `force` don't always re-aggregate.
+By default the counts are served from the cache the monitor keeps on the queue table. While the background supervisor is running it refreshes that cache every `monitorIntervalSeconds`, so the value is at most one monitor interval stale; if monitoring is disabled the cache is still served for up to about an hour (or the configured monitor/supervise interval, whichever is larger) before it is recomputed on read. Pass `{ force: true }` to re-count directly from the job table and update the cache immediately — though even `force` reuses a value computed in the last minute, so repeated forced calls don't each re-aggregate.
 
 ```js
 const [stats] = await boss.getQueueStats('email-send')

@@ -107,8 +107,8 @@ afterEach(() => {
 ## Example Test
 
 ```js
-const PgBoss = require('pg-boss')
-const assert = require('assert')
+import PgBoss from 'pg-boss'
+import assert from 'node:assert'
 
 describe('email notifications', () => {
   let boss

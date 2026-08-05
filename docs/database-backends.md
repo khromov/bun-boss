@@ -61,9 +61,10 @@ in the source. These flags are not user-configurable — `resolveBackend` derive
 | Immediate constraints | Omit `DEFERRABLE INITIALLY DEFERRED` on foreign keys. | Constraints check immediately rather than at commit (no effect on normal operation). | `noDeferrableConstraints` |
 | Lock-free schema setup | Disable `pg_advisory_xact_lock` (used to coordinate schema creation). | Concurrent instances may occasionally do redundant maintenance — a performance, not correctness, concern. | `noAdvisoryLocks` |
 | Plain indexes | Omit the `INCLUDE` clause on covering indexes. | Slightly less efficient index-only scans during fetch; minimal for most workloads. | `noCoveringIndexes` |
+| No LISTEN/NOTIFY | Skip the transactional `pg_notify` on job creation and the `useListenNotify` listener. | Workers fall back to polling only; jobs are delivered on the poll interval rather than the moment they are created. | `noListenNotify` |
 
-Lock-free fetch and split-statement writes are **runtime** behaviors; the other four are **schema**
-choices applied at install time.
+Lock-free fetch, split-statement writes, and LISTEN/NOTIFY are **runtime** behaviors; the other four
+are **schema** choices applied at install time.
 
 ### Why fetch and mutation strategy are tracked separately
 
@@ -151,7 +152,7 @@ connection pool, via the `fromPglite` adapter.
 Install PGlite alongside pg-boss:
 
 ```bash
-npm install @electric-sql/pglite
+bun add @electric-sql/pglite
 ```
 
 Construct a PGlite instance, wrap it with `fromPglite`, and select the `pglite` backend profile:
@@ -329,9 +330,6 @@ within one process instead.
 
 #### What is different from the Postgres backends
 
-- **Fresh installs only**: the sqlite schema installs at the current version; there is no
-  migration history. Upgrading pg-boss against an older sqlite install fails with an explicit
-  error until sqlite migrations ship.
 - **No LISTEN/NOTIFY**: workers rely on polling (the correctness floor on every backend).
 - **`findJobs({ data })`** matches shallowly: every top-level key/value in the filter must match;
   nested objects compare as JSON text rather than by deep containment.
