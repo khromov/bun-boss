@@ -177,6 +177,82 @@ async function executeReserved (sql: BunSqlLike, text: string): Promise<any> {
   }
 }
 
+// One private client per caller-supplied client, created on the first transaction block. Keyed
+// weakly so an adapter built per operation — which is how the `db` option is normally used — shares
+// the client rather than opening one each time.
+const transactionClients = new WeakMap<BunSqlLike, Promise<BunSqlLike | null>>()
+
+// A single-connection sibling of the caller's client, used for transaction blocks only.
+//
+// Bun 1.3.x hands a pooled connection to a waiting query in the window between a transaction block
+// failing and the ROLLBACK that clears its aborted state, so an unrelated query fails with 25P02.
+// Reserving does not help: the leak is inside the pool the reserved connection came from. A client
+// of its own has no other users, so there is nobody to hand the aborted connection to, and the
+// ROLLBACK below always wins the race against the next block.
+//
+// max: 1 also serializes blocks, which costs nothing — pg-boss already serializes them behind an
+// advisory lock — and idleTimeout keeps an idle deployment from holding the extra connection open.
+async function getTransactionClient (sql: BunSqlLike): Promise<BunSqlLike | null> {
+  let pending = transactionClients.get(sql)
+
+  if (!pending) {
+    pending = (async () => {
+      const options = (sql as { options?: Record<string, unknown> }).options
+
+      // No options to clone (a mock, or a bun that stops exposing them): fall back to reserving.
+      if (!options) {
+        return null
+      }
+
+      try {
+        // Imported lazily and only under bun, so the module still loads on node, where this
+        // adapter is unreachable anyway.
+        const { SQL } = await import('bun')
+        return new SQL({ ...options, max: 1, idleTimeout: 30 }) as unknown as BunSqlLike
+      } catch {
+        return null
+      }
+    })()
+
+    transactionClients.set(sql, pending)
+  }
+
+  return await pending
+}
+
+// Blocks are queued here rather than inside bun. Handing two at once to a single-connection client
+// puts the second one in bun's queue, where it is dispatched the moment the first fails — ahead of
+// the ROLLBACK clearing the aborted transaction, so it fails too. Waiting in JS keeps the ROLLBACK
+// ordered before the next block. Serializing costs nothing: pg-boss already runs these one at a
+// time behind an advisory lock.
+const transactionQueues = new WeakMap<BunSqlLike, Promise<unknown>>()
+
+async function executeTransaction (sql: BunSqlLike, text: string): Promise<any> {
+  const client = await getTransactionClient(sql)
+
+  if (!client) {
+    return await executeReserved(sql, text)
+  }
+
+  const run = async () => {
+    try {
+      return await client.unsafe(text)
+    } catch (err) {
+      // The connection is this client's only one and is reused by the next block, so an aborted
+      // transaction still has to be cleared — it just cannot poison anyone else's query first.
+      await client.unsafe('ROLLBACK').catch(() => {})
+      throw err
+    }
+  }
+
+  const queued = (transactionQueues.get(sql) ?? Promise.resolve()).then(run, run)
+
+  // The chain must not reject, or every later block inherits the failure.
+  transactionQueues.set(sql, queued.catch(() => {}))
+
+  return await queued
+}
+
 /**
  * Adapts Bun's built-in SQL client to pg-boss's {@link IDatabase}.
  *
@@ -230,7 +306,7 @@ export function fromBunSql (sql: BunSqlLike): IDatabase {
           }
         }
 
-        return normalizeResult(await executeReserved(sql, query))
+        return normalizeResult(await executeTransaction(sql, query))
       } catch (err) {
         throw promoteSqlState(err)
       }
