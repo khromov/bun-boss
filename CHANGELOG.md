@@ -5,7 +5,6 @@
 
 ### Bug Fixes
 
-* **docs:** use absolute sidebar links so nested pages don't 404 ([e0320d6](https://github.com/khromov/bun-boss/commit/e0320d6654fa3a1d883a46d649fc4eb489fae857))
 * **docs:** use absolute sidebar links so nested pages don't 404 ([bf27583](https://github.com/khromov/bun-boss/commit/bf2758380d1abd70979bd511f05ffab6cf837d70))
 
 ## [0.2.1](https://github.com/khromov/bun-boss/compare/bun-boss-v0.2.0...bun-boss-v0.2.1) (2026-08-07)
@@ -13,7 +12,6 @@
 
 ### Bug Fixes
 
-* record spy transitions for queues before their first getSpy() call ([b64c20d](https://github.com/khromov/bun-boss/commit/b64c20d3fd3c9900c9716264400db676d982b225))
 * record spy transitions for queues before their first getSpy() call ([5c2a4f5](https://github.com/khromov/bun-boss/commit/5c2a4f5f229204761bf86a42a8a4eeddd494d5c9))
 
 ## [0.2.0](https://github.com/khromov/bun-boss/compare/bun-boss-v0.1.0...bun-boss-v0.2.0) (2026-08-07)
