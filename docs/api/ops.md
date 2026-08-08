@@ -11,7 +11,7 @@ await boss.start()
 await boss.send('hey-there', { msg:'this came for you' })
 ```
 
-If the required database objects do not exist in the specified database, **`start()` will automatically create them** at the current schema version. There is no in-place upgrade from an older installed schema version: if bun-boss finds a schema older than the version this release ships, `start()` throws rather than migrating it in place.
+If the required database objects do not exist in the specified database, **`start()` will automatically create them** at the current schema version. If it finds a schema older than the version this release ships, `start()` migrates it in place, applying each registered upgrade step in one transaction. When no upgrade path covers the installed version, `start()` throws rather than proceeding. Pass `migrate: false` to verify the installed schema matches this release's version and throw otherwise, instead of installing or migrating.
 
 Schema installation is nested within an advisory lock to prevent race conditions during `start()`. Internally, this lock is created using `pg_advisory_xact_lock()` which auto-unlocks at the end of the transaction and doesn't require a persistent session or the need to issue an unlock.
 

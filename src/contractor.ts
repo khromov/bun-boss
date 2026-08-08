@@ -1,5 +1,6 @@
 import assert from 'node:assert'
 import * as plans from './plans.ts'
+import * as migrationStore from './migrationStore.ts'
 import packageJson from '../package.json' with { type: 'json' }
 import type * as types from './types.ts'
 
@@ -15,10 +16,15 @@ class Contractor {
 
   private config: types.ResolvedConstructorOptions
   private db: types.IDatabase
+  private migrations: types.Migration[]
 
   constructor (db: types.IDatabase, config: types.ResolvedConstructorOptions) {
     this.config = config
     this.db = db
+    this.migrations = config.__test__migrations ?? migrationStore.getAll(config, {
+      noTablePartitioning: config.noTablePartitioning,
+      noCoveringIndexes: config.noCoveringIndexes
+    })
   }
 
   async schemaVersion () {
@@ -37,10 +43,8 @@ class Contractor {
     if (installed) {
       const version = await this.schemaVersion()
 
-      // bun-boss installs fresh at the current schema version and carries no migration history;
-      // a lower installed version means this database predates this release and can't be upgraded.
       if (version !== null && schemaVersion > version) {
-        throw new Error(`schema version ${version} cannot be upgraded to ${schemaVersion} by this release (no in-place migration path)`)
+        await this.migrate(version)
       }
     } else {
       await this.assertNoSchemaCaseVariant()
@@ -97,6 +101,19 @@ class Contractor {
 
     if (schemaVersion !== version) {
       throw new Error(`bun-boss schema version ${version} does not match the expected version ${schemaVersion}`)
+    }
+  }
+
+  async migrate (version: number) {
+    try {
+      const commands = migrationStore.migrate(this.config, version, this.migrations, this.config.noAdvisoryLocks)
+      await this.db.executeSql(commands)
+    } catch (err: any) {
+      // A concurrent migrator that reached the target first makes assertMigration abort the whole
+      // transaction: division by zero (22012) on postgres, a version-PK violation (23505) on
+      // sqlite. Both are benign race losers; anything else rethrows. Mirrors create()'s tolerance.
+      const benignRace = err.code === plans.PG_ERROR.divisionByZero || err.code === '23505'
+      assert(benignRace, err)
     }
   }
 

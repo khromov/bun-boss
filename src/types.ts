@@ -193,6 +193,19 @@ export interface CompatibilityFlags {
   noListenNotify?: boolean;
 }
 
+/**
+ * One step in the schema upgrade chain, climbing `previous` to `version` by running the
+ * synchronous `install` DDL. `uninstall` is retained for shape parity; the forward-only path
+ * never reads it.
+ */
+export interface Migration {
+  release: string;
+  version: number;
+  previous: number;
+  install: string[];
+  uninstall?: string[];
+}
+
 export interface ConstructorOptions extends DatabaseOptions, SchedulingOptions, MaintenanceOptions, BackendOptions {
   /**
    * Enables the LISTEN/NOTIFY listener so workers on notify-enabled queues are woken
@@ -271,6 +284,12 @@ export interface ConstructorOptions extends DatabaseOptions, SchedulingOptions, 
    * @internal
    */
   __test__noListenNotify?: boolean;
+  /**
+   * Inject a synthetic migration chain to exercise the upgrade path without a real schema bump,
+   * overriding the built-in (currently empty) chain from `migrationStore.getAll`.
+   * @internal
+   */
+  __test__migrations?: Migration[];
 }
 
 /** @internal */

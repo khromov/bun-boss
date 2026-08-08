@@ -1055,6 +1055,22 @@ export function insertVersion (c: Ctx, version: number) {
   return `INSERT INTO ${qn(c, 'version')}(version) VALUES ('${version}')`
 }
 
+// First statement of a migration transaction: aborts the whole block when another instance already
+// reached `version`, so a lost race can't re-apply the install DDL.
+export function assertMigration (c: Ctx, version: number) {
+  if (dial(c).name === 'sqlite') {
+    // SQLite yields NULL (not an error) for x/0, so the postgres division trick can't abort here.
+    // BEGIN IMMEDIATE already serializes writers (the advisory-lock role); this only defends the
+    // lost-race-after-commit case by tripping the single-row version PRIMARY KEY: the SELECT
+    // returns a row (value = version, colliding with the row already there) ONLY when the installed
+    // version already reached `version`. The sqlite adapter maps that PK violation to SQLSTATE 23505.
+    return `INSERT INTO ${qn(c, 'version')} (version) SELECT ${version} WHERE (SELECT version FROM ${qn(c, 'version')}) >= ${version}`
+  }
+
+  // Raises PG_ERROR.divisionByZero (22012) if already on the desired schema version.
+  return `SELECT version::int/(version::int-${version}) from ${qn(c, 'version')}`
+}
+
 interface GroupConcurrencyConfig {
   default: number
   tiers?: Record<string, number>
