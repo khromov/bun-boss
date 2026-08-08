@@ -6,7 +6,7 @@ Queueing jobs in Postgres, SQLite, and memory from Bun like a boss.
 ```js
 import { BunBoss } from 'bun-boss';
 
-async function readme() {
+try {
   const boss = new BunBoss('postgres://user:pass@host/database');
 
   boss.on('error', console.error)
@@ -24,13 +24,10 @@ async function readme() {
   await boss.work(queue, async ([ job ]) => {
     console.log(`received job ${job.id} with data ${JSON.stringify(job.data)}`)
   })
+} catch (err) {
+  console.log(err)
+  process.exit(1)
 }
-
-readme()
-  .catch(err => {
-    console.log(err)
-    process.exit(1)
-  })
 ```
 
 bun-boss is a job queue for Bun applications that provides background processing and reliable asynchronous execution, backed by PostgreSQL (including embedded PGlite) or embedded SQLite.
