@@ -2675,7 +2675,9 @@ export function findJobs (c: Ctx, table: string, options: { queued: boolean, byK
       // Shallow containment: every top-level key/value in the param must match. Nested objects
       // compare as JSON text.
       ? `AND NOT EXISTS (SELECT 1 FROM json_each($${paramIndex}) p WHERE json_extract(data, '$.' || p.key) IS NOT p.value)`
-      : `AND data @> $${paramIndex}`)
+      // The explicit ::jsonb cast is load-bearing: the bun adapter only re-encodes a json param
+      // when the SQL text carries a cast, so a bare `data @> $n` would be double-encoded.
+      : `AND data @> $${paramIndex}::jsonb`)
   }
 
   if (queued) {
