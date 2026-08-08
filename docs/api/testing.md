@@ -208,9 +208,11 @@ const job = await waitPromise // Resolves correctly
 | - | - |
 | `created` | Job inserted via `send()` or `insert()` |
 | `active` | Job fetched by a worker and handler started |
-| `completed` | Job reached the `completed` state — the handler returned successfully, or `complete()` was called |
+| `completed` | A worker's handler returned successfully, or `complete()` was called from inside a handler |
 | `failed` | Handler threw an error and the job's retries were exhausted |
 
 A handler that calls `fail()` and then returns normally is recorded as `failed`, not `completed`.
+
+Spies observe the worker path only. A job settled outside a handler — `fetch()` followed by `complete()` — reaches `completed` in the database, but the spy never records it and a wait on that state will hang.
 
 `retry` and `cancelled` are **not** tracked. `waitForJob()` with an untracked state never resolves and never rejects — TypeScript rejects it via `JobSpyState`, but plain JS will hang.

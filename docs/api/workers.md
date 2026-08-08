@@ -71,13 +71,13 @@ The default options for `work()` is 1 job every 2 seconds.
 
   Same as in [`fetch()`](./jobs.md#fetchname-options)
 
-* **pollingIntervalSeconds**, int, *(default=2)*
+* **pollingIntervalSeconds**, number, *(default=2)*
 
   Base interval to check for new jobs, in seconds. Must be >=0.5 (500ms). Used when no faster or slower mode applies: queues without `notify`, or notify-enabled queues when the LISTEN/NOTIFY listener is unavailable.
 
   > **Note**: When [LISTEN/NOTIFY](#low-latency-dispatch-with-listennotify) is active for a queue, workers are woken the instant a job is created and polling automatically falls back to the slower `notifyPollingIntervalSeconds` backstop — you don't need to raise `pollingIntervalSeconds` yourself.
 
-* **notifyPollingIntervalSeconds**, int, *(default=max(30, pollingIntervalSeconds))*
+* **notifyPollingIntervalSeconds**, number, *(default=max(30, pollingIntervalSeconds))*
 
   Polling interval used only while [LISTEN/NOTIFY](#low-latency-dispatch-with-listennotify) is active for the queue (the queue has `notify: true` and the instance listener is established). Since NOTIFY wakes workers immediately, polling only needs to run as a slow safety net, so this can be much larger than `pollingIntervalSeconds`. When notify is off or unavailable, `pollingIntervalSeconds` is used instead. Must be >=0.5 (500ms) and never below `pollingIntervalSeconds` — the default is floored at `pollingIntervalSeconds` so raising that above 30 raises this too.
 

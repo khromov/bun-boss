@@ -22,9 +22,12 @@ The runtime user still needs access to the objects the DBA created, otherwise `s
 ```sql
 GRANT USAGE ON SCHEMA pgboss TO leastprivuser;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA pgboss TO leastprivuser;
+ALTER DEFAULT PRIVILEGES IN SCHEMA pgboss GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO leastprivuser;
 ```
 
-No CREATE privilege is required at runtime with `migrate: false`.
+`ON ALL TABLES` only covers the tables that exist when you run it, so the `ALTER DEFAULT PRIVILEGES` line is what keeps a queue created later reachable.
+
+No CREATE privilege is required at runtime with `migrate: false`, as long as queues are created by the privileged operator. Creating a queue from the application still performs DDL: `createQueue(name, { partition: true })` builds a dedicated table and fails with `permission denied for schema pgboss`, and deleting a partitioned queue requires ownership of that table.
 
 > [!NOTE]
 > When managing schema manually, you will need to monitor future releases for schema changes.

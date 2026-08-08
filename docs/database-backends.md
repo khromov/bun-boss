@@ -330,7 +330,8 @@ await boss.send('email', { to: 'user@example.com' })
 
 `backend: 'sqlite'` **requires** a `db` adapter — there is no built-in SQLite driver — and
 **rejects** `url`: the connection lives on the `SQL` instance you hand to `fromBunSqlite`, so
-`new BunBoss({ backend: 'sqlite', url: 'sqlite://app.db' })` throws.
+`new BunBoss({ backend: 'sqlite', db: fromBunSqlite(sql), url: 'sqlite://app.db' })` throws. The
+`db` assert fires first, so a literal that omits both is rejected for the missing adapter.
 
 Because bun-boss's tables live in the **same database file** as your application's (namespaced by a
 quoted `"schema.table"` prefix), a job enqueued inside a transaction opened through the adapter's
