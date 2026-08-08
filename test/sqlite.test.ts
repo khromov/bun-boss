@@ -45,10 +45,8 @@ describe('sqlite', () => {
 
     await sql.unsafe(`UPDATE "pgboss.version" SET version = ${packageJson.bunboss.schema - 1}`)
 
-    // start() now takes the restored upgrade path (installed < target -> migrate), but the built-in
-    // migration chain is empty at the v1 floor, so there is no registered step to climb and it
-    // surfaces the not-found error rather than silently doing nothing. A real chain is exercised
-    // end to end in migration.test.ts via the __test__migrations hook.
+    // start() now takes the upgrade path, but the built-in chain is empty at the v1 floor so there
+    // is no registered step to climb; a real chain is exercised in migration.test.ts.
     const second = new BunBoss({ backend: 'sqlite', db: fromBunSqlite(sql), supervise: false, schedule: false })
     second.on('error', () => {})
     await expect(second.start()).rejects.toThrow(/not found/)

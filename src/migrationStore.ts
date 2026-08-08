@@ -8,17 +8,9 @@ interface GetAllOptions {
   noCoveringIndexes?: boolean
 }
 
-// Ordered upgrade chain. EMPTY today: bun-boss installs fresh at package.json `bunboss.schema`
-// (= 1, the install floor), so there is no historical version to climb from. A future schema bump
-// appends one dialect-aware entry here, rendering DDL through the seam so it serves both backends:
-//
-//   { release: '1.2.0', version: 2, previous: 1,
-//     install: [ `ALTER TABLE ${qn(c, 'version')} ADD COLUMN ...` ] }   // import { qn } from './dialect.ts'
-//
-// `c` is threaded now so those entries can render per-dialect (qn(c, ...), dial(c).now(), ...).
-// Install DDL is SYNCHRONOUS ONLY — the async/CONCURRENTLY BAM path was intentionally dropped and
-// must not return. `options` mirrors the schema-shape knobs of plans.create for entries whose DDL
-// differs by shape; unused while the list is empty.
+// Empty at the v1 install floor — bun-boss installs fresh at package.json `bunboss.schema`, so
+// there is no prior version to climb from. A future schema bump appends one entry rendered through
+// the dialect seam (qn(c, ...)) so it serves both backends.
 export function getAll (c: Ctx, options: GetAllOptions = {}): types.Migration[] {
   return []
 }
@@ -28,10 +20,7 @@ export function getMinVersion (c: Ctx): number {
   return all.length ? Math.min(...all.map(m => m.previous)) : Infinity
 }
 
-// Wraps one migration's statements as a single atomic, self-guarding, optionally advisory-locked
-// block: assertMigration first (aborts the whole tx if another writer already reached `version`),
-// the install DDL, then setVersion last. Same locked() shape plans.create() uses; noAdvisoryLocks
-// is true for sqlite so advisoryLock is skipped there.
+// assertMigration runs first so a lost race aborts the transaction before the install DDL re-applies.
 function flatten (c: Ctx, commands: string[], version: number, noAdvisoryLocks?: boolean): string {
   return plans.locked(
     c,
@@ -41,14 +30,11 @@ function flatten (c: Ctx, commands: string[], version: number, noAdvisoryLocks?:
   )
 }
 
-// Selects the chain from `version` up to the newest entry and renders it as one SQL script.
 export function migrate (c: Ctx, version: number, migrations?: types.Migration[], noAdvisoryLocks?: boolean): string {
   migrations = migrations || getAll(c)
 
-  // Floor guard: refuse to climb from a DB older than the oldest entry's starting point. Without
-  // it, filter(previous >= version) would select the whole chain for any version below the minimum
-  // `previous` and apply migrations over missing intermediate steps. Version 0 is the from-scratch
-  // sentinel and is exempt; non-numeric garbage falls through to the not-found assert below.
+  // Refuse to climb from below the oldest entry, which would otherwise apply steps over schema that
+  // was never installed; version 0 is the from-scratch sentinel and is exempt.
   if (Number.isInteger(version) && version !== 0 && migrations.length) {
     const minPrevious = Math.min(...migrations.map(m => m.previous))
     assert(version >= minPrevious,

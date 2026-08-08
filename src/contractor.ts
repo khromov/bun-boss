@@ -109,9 +109,8 @@ class Contractor {
       const commands = migrationStore.migrate(this.config, version, this.migrations, this.config.noAdvisoryLocks)
       await this.db.executeSql(commands)
     } catch (err: any) {
-      // A concurrent migrator that reached the target first makes assertMigration abort the whole
-      // transaction: division by zero (22012) on postgres, a version-PK violation (23505) on
-      // sqlite. Both are benign race losers; anything else rethrows. Mirrors create()'s tolerance.
+      // assertMigration aborts the transaction when a concurrent migrator won the race — division by
+      // zero (22012) on postgres, a version-PK violation (23505) on sqlite — and both are benign.
       const benignRace = err.code === plans.PG_ERROR.divisionByZero || err.code === '23505'
       assert(benignRace, err)
     }
