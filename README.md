@@ -4,8 +4,9 @@ Queueing jobs in Postgres, SQLite, and memory from Bun like a boss.
 
 
 ```js
+import { BunBoss } from 'bun-boss';
+
 async function readme() {
-  const { BunBoss } = require('bun-boss');
   const boss = new BunBoss('postgres://user:pass@host/database');
 
   boss.on('error', console.error)
