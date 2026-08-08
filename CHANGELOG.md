@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/khromov/bun-boss/compare/bun-boss-v0.2.1...bun-boss-v0.2.2) (2026-08-08)
+
+
+### Bug Fixes
+
+* **docs:** use absolute sidebar links so nested pages don't 404 ([e0320d6](https://github.com/khromov/bun-boss/commit/e0320d6654fa3a1d883a46d649fc4eb489fae857))
+* **docs:** use absolute sidebar links so nested pages don't 404 ([bf27583](https://github.com/khromov/bun-boss/commit/bf2758380d1abd70979bd511f05ffab6cf837d70))
+
 ## [0.2.1](https://github.com/khromov/bun-boss/compare/bun-boss-v0.2.0...bun-boss-v0.2.1) (2026-08-07)
 
 
