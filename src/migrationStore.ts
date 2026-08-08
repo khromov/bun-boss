@@ -15,11 +15,6 @@ export function getAll (c: Ctx, options: GetAllOptions = {}): types.Migration[] 
   return []
 }
 
-export function getMinVersion (c: Ctx): number {
-  const all = getAll(c)
-  return all.length ? Math.min(...all.map(m => m.previous)) : Infinity
-}
-
 // assertMigration runs first so a lost race aborts the transaction before the install DDL re-applies.
 function flatten (c: Ctx, commands: string[], version: number, noAdvisoryLocks?: boolean): string {
   return plans.locked(
@@ -33,18 +28,14 @@ function flatten (c: Ctx, commands: string[], version: number, noAdvisoryLocks?:
 export function migrate (c: Ctx, version: number, migrations?: types.Migration[], noAdvisoryLocks?: boolean): string {
   migrations = migrations || getAll(c)
 
-  // Refuse to climb from below the oldest entry, which would otherwise apply steps over schema that
-  // was never installed; version 0 is the from-scratch sentinel and is exempt.
-  if (Number.isInteger(version) && version !== 0 && migrations.length) {
-    const minPrevious = Math.min(...migrations.map(m => m.previous))
-    assert(version >= minPrevious,
-      `Cannot migrate bun-boss schema from version ${version}: the oldest supported starting version is ${minPrevious}.`)
-  }
-
   const result = migrations
     .filter(m => m.previous >= version)
     .sort((a, b) => a.version - b.version)
     .reduce((acc, m) => {
+      // Each step must start exactly where the chain has reached — starting below the oldest entry
+      // or crossing a gap between entries would apply DDL over a schema shape that was never installed.
+      assert(m.previous === acc.version,
+        `Cannot migrate bun-boss schema from version ${version}: the chain reaches ${acc.version} but the next step starts at ${m.previous}.`)
       acc.install = acc.install.concat(m.install)
       acc.version = m.version
       return acc

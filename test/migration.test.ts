@@ -2,6 +2,7 @@ import { describe, it, expect } from './harness.ts'
 import { ctx } from './hooks.ts'
 import { getDb } from './testHelper.ts'
 import Contractor from '../src/contractor.ts'
+import * as migrationStore from '../src/migrationStore.ts'
 import { getConfig } from '../src/attorney.ts'
 import * as plans from '../src/plans.ts'
 import { qn } from '../src/dialect.ts'
@@ -42,5 +43,14 @@ describe('migration', function () {
     } finally {
       await db.close()
     }
+  })
+
+  it('refuses a chain that does not start at the installed version or has a gap', function () {
+    const config = getConfig(ctx.bossConfig)
+    const step = (previous: number, version: number): Migration =>
+      ({ release: 'test', previous, version, install: ['SELECT 1'] })
+
+    expect(() => migrationStore.migrate(config, 1, [step(2, 3)])).toThrow(/the next step starts at 2/)
+    expect(() => migrationStore.migrate(config, 1, [step(1, 2), step(3, 4)])).toThrow(/the next step starts at 3/)
   })
 })

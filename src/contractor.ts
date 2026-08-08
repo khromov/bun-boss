@@ -45,6 +45,12 @@ class Contractor {
 
       if (version !== null && schemaVersion > version) {
         await this.migrate(version)
+
+        // A lost race is fine because the winner set the version; a version still stale here means
+        // the migration failed without surfacing, and running against the old schema would be worse.
+        const migrated = await this.schemaVersion()
+        assert(migrated === schemaVersion,
+          `bun-boss schema version ${migrated} does not match the expected version ${schemaVersion} after migration`)
       }
     } else {
       await this.assertNoSchemaCaseVariant()
@@ -110,8 +116,11 @@ class Contractor {
       await this.db.executeSql(commands)
     } catch (err: any) {
       // assertMigration aborts the transaction when a concurrent migrator won the race — division by
-      // zero (22012) on postgres, a version-PK violation (23505) on sqlite — and both are benign.
-      const benignRace = err.code === plans.PG_ERROR.divisionByZero || err.code === '23505'
+      // zero (22012) on postgres, a version-PK violation (23505) on sqlite. Only the active dialect's
+      // code is benign: accepting the other's would swallow a real 23505 raised by migration DDL on postgres.
+      const benignRace = this.config.dialect.name === 'sqlite'
+        ? err.code === '23505'
+        : err.code === plans.PG_ERROR.divisionByZero
       assert(benignRace, err)
     }
   }
