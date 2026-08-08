@@ -59,6 +59,7 @@ const cases: Record<string, () => unknown> = {
   getSchemaCaseVariants: () => plans.getSchemaCaseVariants(S),
   getPartitionedQueueTables: () => plans.getPartitionedQueueTables(S),
   insertVersion: () => plans.insertVersion(S, 1),
+  assertMigration: () => plans.assertMigration(S, 2),
   'fetchNextJob base': () => plans.fetchNextJob({ ...fetchBase }),
   'fetchNextJob noSkipLocked': () => plans.fetchNextJob({ ...fetchBase }, true),
   'fetchNextJob metadata': () => plans.fetchNextJob({ ...fetchBase, includeMetadata: true }),

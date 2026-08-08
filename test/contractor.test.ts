@@ -16,6 +16,19 @@ function contractorThrowing (err: unknown): Contractor {
   return new Contractor(db, getConfig(ctx.bossConfig))
 }
 
+// migrate() only reaches db.executeSql when the chain is non-empty, so inject a synthetic step.
+// The benign-race code is dialect-specific, so the backend is forced rather than inherited from
+// the active runner; the throwing db never executes SQL and doubles as the sqlite-required adapter.
+function contractorThrowingMigrating (err: unknown, backend: 'postgres' | 'sqlite'): Contractor {
+  const db: IDatabase = {
+    async executeSql () {
+      throw err
+    }
+  }
+  const migration = { release: 'test', version: 1, previous: 0, install: ['SELECT 1'] }
+  return new Contractor(db, getConfig({ ...ctx.bossConfig, backend, db, __test__migrations: [migration] }))
+}
+
 describe('contractor', function () {
   it('create() tolerates the already-exists message flavor of the install race', async function () {
     await contractorThrowing(new Error('relation "version" already exists')).create()
@@ -41,5 +54,25 @@ describe('contractor', function () {
   it('create() rethrows unrelated errors', async function () {
     const err = Object.assign(new Error('permission denied for database'), { code: '42501' })
     await expect(contractorThrowing(err).create()).rejects.toThrow('permission denied')
+  })
+
+  it('migrate() tolerates the postgres division-by-zero flavor of the migration race', async function () {
+    const err = Object.assign(new Error('division by zero'), { code: '22012' })
+    await contractorThrowingMigrating(err, 'postgres').migrate(0)
+  })
+
+  it('migrate() tolerates the sqlite version-PK-violation flavor of the migration race', async function () {
+    const err = Object.assign(new Error('UNIQUE constraint failed: pgboss.version.version'), { code: '23505' })
+    await contractorThrowingMigrating(err, 'sqlite').migrate(0)
+  })
+
+  it('migrate() rethrows a unique violation on postgres, where only 22012 marks the race', async function () {
+    const err = Object.assign(new Error('duplicate key value violates unique constraint "some_new_index"'), { code: '23505' })
+    await expect(contractorThrowingMigrating(err, 'postgres').migrate(0)).rejects.toThrow('duplicate key')
+  })
+
+  it('migrate() rethrows unrelated errors', async function () {
+    const err = Object.assign(new Error('permission denied for database'), { code: '42501' })
+    await expect(contractorThrowingMigrating(err, 'postgres').migrate(0)).rejects.toThrow('permission denied')
   })
 })

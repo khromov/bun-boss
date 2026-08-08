@@ -140,7 +140,7 @@ function sqliteLiteral (value: unknown): string {
 // INTEGER booleans, a CHECK-constrained TEXT state column, and inline foreign keys (SQLite has
 // no ALTER TABLE ADD CONSTRAINT). Stored functions don't exist — create_queue/delete_queue are
 // rendered as direct statements by their builders. Installs at the current schema version;
-// there is no sqlite migration history.
+// older installs climb migrationStore's dialect-aware chain instead.
 function createSqlite (c: Ctx, version: number): string {
   const commands = [
     `CREATE TABLE ${qn(c, 'version')} (
@@ -1053,6 +1053,20 @@ export function getPartitionedQueueTables (c: Ctx) {
 
 export function insertVersion (c: Ctx, version: number) {
   return `INSERT INTO ${qn(c, 'version')}(version) VALUES ('${version}')`
+}
+
+// Aborts the migration transaction when another instance already reached `version`, so a lost race
+// can't re-apply the install DDL.
+export function assertMigration (c: Ctx, version: number) {
+  if (dial(c).name === 'sqlite') {
+    // SQLite yields NULL (not an error) for x/0, so instead of the postgres trick it trips the
+    // single-row version PRIMARY KEY (SQLSTATE 23505) once the installed version reaches `version`.
+    return `INSERT INTO ${qn(c, 'version')} (version) SELECT ${version} WHERE (SELECT version FROM ${qn(c, 'version')}) >= ${version}`
+  }
+
+  // Raises PG_ERROR.divisionByZero (22012) once already on the desired schema version. Upstream-verbatim,
+  // so it aborts only on exact equality — an installed version already beyond `version` slips through.
+  return `SELECT version::int/(version::int-${version}) from ${qn(c, 'version')}`
 }
 
 interface GroupConcurrencyConfig {

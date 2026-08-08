@@ -1081,6 +1081,9 @@ SELECT table_name FROM pgboss.queue WHERE partition = true
 === insertVersion ===
 INSERT INTO pgboss.version(version) VALUES ('1')
 
+=== assertMigration ===
+SELECT version::int/(version::int-2) from pgboss.version
+
 === fetchNextJob base ===
 
       WITH

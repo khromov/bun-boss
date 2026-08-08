@@ -36,7 +36,7 @@ describe('sqlite', () => {
     await boss.stop({ graceful: false })
   })
 
-  it('refuses to start against an older installed schema version', async () => {
+  it('attempts to migrate an older installed schema and reports when no path exists', async () => {
     const sql = newInstance()
     const first = new BunBoss({ backend: 'sqlite', db: fromBunSqlite(sql), supervise: false, schedule: false })
     first.on('error', () => {})
@@ -45,9 +45,11 @@ describe('sqlite', () => {
 
     await sql.unsafe(`UPDATE "pgboss.version" SET version = ${packageJson.bunboss.schema - 1}`)
 
+    // start() now takes the upgrade path, but the built-in chain is empty at the v1 floor so there
+    // is no registered step to climb; a real chain is exercised in migration.test.ts.
     const second = new BunBoss({ backend: 'sqlite', db: fromBunSqlite(sql), supervise: false, schedule: false })
     second.on('error', () => {})
-    await expect(second.start()).rejects.toThrow(/cannot be upgraded/)
+    await expect(second.start()).rejects.toThrow(/not found/)
   })
 
   it('rejects a config without a db adapter', () => {
