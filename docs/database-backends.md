@@ -228,7 +228,8 @@ fails under concurrency — contended maintenance being the realistic trigger. T
 Bun's pool and is fixed in 1.4; on 1.3.x the driver detects the aborted state, clears it, and
 retries, so the failure is masked rather than eliminated. A rarer silent form of the same 1.3.x
 defect can return an empty result for a committed row under concurrent load — bun-boss corroborates
-queue lookups to bound it (see `ISSUES.txt` #3), but only 1.4 removes it.
+queue lookups to bound it (see the queue-cache comments in `src/manager.ts`), but only 1.4 removes
+it.
 
 Transaction-scoped use (`fromBunSql(tx)` inside `sql.begin()`) never reserves a connection and is
 unaffected on either version.
@@ -351,6 +352,29 @@ within one process instead.
   `withTransaction` therefore loses flow atomicity, and when a flow fails inside a caller-owned
   transaction (`{ db }`), the transaction itself stays usable — roll it back rather than
   committing after a caught flow error.
+
+#### Bun sqlite driver quirks the adapter works around
+
+The `fromBunSqlite` adapter (`src/adapters/sqlite.ts`) compensates for several behaviors of Bun's
+`SQL` sqlite driver that differ from its Postgres client. Each is silent if the workaround
+regresses, so `scripts/spike-bun-sqlite.ts` asserts them and runs in CI before the sqlite suite;
+re-run it when moving toolchains. Verified on Bun 1.3.14 (SQLite 3.51):
+
+- **Positional binding by first appearance.** Array values bind to `$n` placeholders by order of
+  first appearance, not by number (`SELECT $2, $1` binds `values[0]` to `$2`). The adapter rewrites
+  every `$n` to an anonymous `?` and expands the values per occurrence.
+- **Multi-statement strings are lossy.** `unsafe()` silently drops statements and result rows from a
+  multi-statement string. The adapter splits scripts and runs statements one at a time under its
+  serialization lock.
+- **Double-quote in a string literal desyncs the lexer.** A `"` inside a single-quoted literal
+  breaks SELECTs (they return no rows). Consequently JSON is never rendered as an inline literal on
+  the sqlite dialect — it is always bound as a parameter.
+- **Date parameters bind as NULL.** The adapter converts `Date` values to the dialect's ISO text
+  (`toSqliteTimestamp`) before binding.
+- **`reserve()` throws and `sql.begin()` interleaves.** The adapter manages `BEGIN IMMEDIATE`/
+  `COMMIT` itself under a per-instance mutex shared by every wrapper of the same `SQL` object.
+- **Alias-qualified `RETURNING` is rejected.** `RETURNING j.id` fails, so sqlite-rendered plans
+  return unqualified columns.
 
 ## Scaling beyond a single table
 

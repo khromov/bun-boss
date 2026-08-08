@@ -175,6 +175,16 @@ describe('plans postgres byte-identity', function () {
     expect(document).toBe(fs.readFileSync(snapshotPath, 'utf8'))
   })
 
+  // The bun adapter (src/adapters/bun.ts) re-encodes a json parameter only when the SQL text
+  // carries an explicit ::json/::jsonb cast, so a bare `data @> $n` would be double-encoded and
+  // fail. Keep the invariant here, in the file that owns the SQL, rather than teaching the adapter
+  // to infer json context from the operator.
+  it('should render every jsonb containment placeholder with an explicit cast', function () {
+    const rendered = Object.values(cases).map(fn => render(fn())).join('\n')
+    const uncast = rendered.match(/(?:@>|<@)\s*\$\d+(?!\s*::\s*json)/g)
+    expect(uncast).toBeNull()
+  })
+
   // The cases record is hand-maintained, so without this a new plans builder would ship with
   // unpinned postgres output (it happened: the redrive split originally landed unsnapshotted).
   it('should include every plans function export in the cases', function () {
