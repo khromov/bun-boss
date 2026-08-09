@@ -591,6 +591,14 @@ export interface JobPollingOptions {
    * @default false
    */
   burstWhenBatchFull?: boolean;
+  /**
+   * Burst trigger. While each fetch returns at least one job there is more work ready, so the
+   * worker keeps fetching continuously with no delay; the first empty fetch ends burst mode and
+   * resumes normal polling. Unlike `burstWhenBatchFull` this works at any `batchSize`, including 1,
+   * making the poll interval the idle cadence rather than a per-job delay while a backlog drains.
+   * @default true
+   */
+  burstWhileNonEmpty?: boolean;
 }
 
 export interface JobFetchOptions {

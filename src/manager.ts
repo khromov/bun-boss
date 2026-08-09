@@ -538,6 +538,7 @@ class Manager extends EventEmitter implements types.EventsMixin {
       notifyPollingInterval: notifyInterval,
       burstWhenReadyExceeds,
       burstWhenBatchFull = false,
+      burstWhileNonEmpty = true,
       batchSize = 1,
       includeMetadata = false,
       priority = true,
@@ -564,17 +565,20 @@ class Manager extends EventEmitter implements types.EventsMixin {
     // backstop > base poll. Evaluated per-iteration so it tracks live cache/notify state and
     // any updateQueue notify toggles.
     //
-    // A burst trigger only engages while the last fetch came back full (>= batchSize). That is
-    // both the meaning of burstWhenBatchFull and the anti-hot-loop guard for burstWhenReadyExceeds:
-    // the cached ready count lags reality, so a short fetch (including 0 < 1 at the default batchSize)
-    // means the queue has likely caught up — fall back to normal polling instead of spinning on
-    // empty fetches. burstWhenBatchFull is ignored at batchSize 1 (every fetch would be "full").
+    // burstWhileNonEmpty (default on) bursts on any non-empty fetch, so a backlog drains at the
+    // fetch rate rather than one job per poll interval even at batchSize 1; an empty fetch is the
+    // anti-hot-loop guard (a failed fetch keeps fetchedCount at 0 in worker.ts, so errors back off
+    // too). The fullBatch-gated triggers stay for opt-out (burstWhileNonEmpty: false): a short
+    // fetch means the queue likely caught up, and burstWhenBatchFull is ignored at batchSize 1
+    // (every fetch would be "full").
     const resolveInterval = (lastFetchCount: number) => {
       const fullBatch = lastFetchCount >= batchSize
-      const burst = fullBatch && (
-        (burstWhenReadyExceeds !== undefined && getReadyCount() > burstWhenReadyExceeds) ||
-        (burstWhenBatchFull && batchSize > 1)
-      )
+      const burst =
+        (burstWhileNonEmpty && lastFetchCount > 0) ||
+        (fullBatch && (
+          (burstWhenReadyExceeds !== undefined && getReadyCount() > burstWhenReadyExceeds) ||
+          (burstWhenBatchFull && batchSize > 1)
+        ))
 
       if (burst) return 0
       return isNotifyActive() ? notifyInterval : interval
