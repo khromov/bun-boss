@@ -681,6 +681,9 @@ export type WorkOptions = JobFetchOptions & JobPollingOptions & WorkConcurrencyO
    * per-job `output`) of each job in the batch. bun-boss settles each job individually, preserving
    * its own output. Any job omitted from the result is failed (and retried) with a descriptive
    * error. Throwing from the handler still fails the whole batch. Defaults to false.
+   *
+   * Jobs may also be settled eagerly via `job.complete()` / `job.fail()`; the batch timeout then
+   * only fails jobs not yet settled.
    */
   perJobResults?: boolean;
 }
@@ -721,11 +724,11 @@ export interface JobResult<ResData = any> {
 }
 
 export interface PerJobWorkHandler<ReqData> {
-  (job: Job<ReqData>[]): Promise<JobResult[]>;
+  (job: SettlableJob<ReqData>[]): Promise<JobResult[]>;
 }
 
 export interface PerJobWorkWithMetadataHandler<ReqData> {
-  (job: JobWithMetadata<ReqData>[]): Promise<JobResult[]>;
+  (job: SettlableJobWithMetadata<ReqData>[]): Promise<JobResult[]>;
 }
 
 /**
@@ -814,6 +817,25 @@ export interface JobWithMetadata<T = object> extends Job<T> {
    * before it was dead-lettered. `null` otherwise.
    */
   sourceRetryCount: number | null;
+}
+
+/**
+ * A batch job that can be settled eagerly, as handed to a `perJobResults` handler. The two methods
+ * durably settle this one job the moment they resolve, so a later batch timeout can no longer fail it.
+ */
+export type SettlableJob<T = object> = Job<T> & {
+  /** Durably settle this job as completed with `output`, independently of the handler's return. */
+  complete(output?: unknown): Promise<void>;
+  /** Durably settle this job as failed with `err`; it retries or dead-letters per the queue config. */
+  fail(err: unknown): Promise<void>;
+}
+
+/** The {@link SettlableJob} shape for handlers started with `includeMetadata: true`. */
+export type SettlableJobWithMetadata<T = object> = JobWithMetadata<T> & {
+  /** Durably settle this job as completed with `output`, independently of the handler's return. */
+  complete(output?: unknown): Promise<void>;
+  /** Durably settle this job as failed with `err`; it retries or dead-letters per the queue config. */
+  fail(err: unknown): Promise<void>;
 }
 
 export interface JobInsert<T = object> {

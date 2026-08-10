@@ -6,6 +6,8 @@ import type {
   WorkWithMetadataHandler,
   PerJobWorkHandler,
   PerJobWorkWithMetadataHandler,
+  SettlableJob,
+  SettlableJobWithMetadata,
   WorkOptions
 } from '../src/index.ts'
 
@@ -47,6 +49,27 @@ describe('WorkHandlerFor resolves the handler from the inferred options', () => 
   })
 })
 
+describe('per-job handlers receive settlable jobs, ordinary handlers do not', () => {
+  it('the per-job handler hands jobs carrying complete/fail', () => {
+    type PerJob = Parameters<PerJobWorkHandler<Req>>[0][number]
+    expectTypeOf<PerJob>().toEqualTypeOf<SettlableJob<Req>>()
+    expectTypeOf<PerJob>().toHaveProperty('complete')
+    expectTypeOf<PerJob>().toHaveProperty('fail')
+  })
+
+  it('the per-job metadata handler hands settlable metadata jobs', () => {
+    type PerJobMeta = Parameters<PerJobWorkWithMetadataHandler<Req>>[0][number]
+    expectTypeOf<PerJobMeta>().toEqualTypeOf<SettlableJobWithMetadata<Req>>()
+    expectTypeOf<PerJobMeta>().toHaveProperty('complete')
+    expectTypeOf<PerJobMeta>().toHaveProperty('fail')
+  })
+
+  it('an ordinary handler hands plain jobs with no settle methods', () => {
+    expectTypeOf<Parameters<WorkHandler<Req>>[0][number]>().not.toHaveProperty('complete')
+    expectTypeOf<Parameters<WorkWithMetadataHandler<Req>>[0][number]>().not.toHaveProperty('fail')
+  })
+})
+
 // Compile-only: never invoked at runtime. tsc/typecheck verify that real work() calls accept valid
 // handlers and reject malformed per-job handlers end to end (overload + inference + const O), not just
 // the WorkHandlerFor mapping in isolation.
@@ -67,6 +90,19 @@ export async function workCallTypeContract (boss: BunBoss): Promise<void> {
       : { id: job.id, status: 'failed', output: new Error('x') }))
   await boss.work('q', { perJobResults: true, includeMetadata: true }, async jobs =>
     jobs.map(job => ({ id: job.id, status: 'deadletter' as const, output: job.priority })))
+
+  // --- accepted: eager settlement inside a per-job handler ---
+  await boss.work('q', { perJobResults: true }, async jobs => {
+    await jobs[0]!.complete({ ok: true })
+    await jobs[0]!.fail(new Error('x'))
+    return []
+  })
+
+  // --- rejected: the eager settle methods are absent without perJobResults ---
+  await boss.work('q', async jobs => {
+    // @ts-expect-error ordinary batch jobs carry no eager complete()
+    await jobs[0]!.complete({ ok: true })
+  })
 
   // --- rejected: a per-job handler that does not resolve with an array ---
   // @ts-expect-error a perJobResults handler must resolve with a JobResult[]
