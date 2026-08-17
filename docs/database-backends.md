@@ -51,10 +51,19 @@ const boss = new BunBoss({
 The `schema` option still names the namespace in both modes; in prefix mode it becomes the quoted
 prefix and defaults to `bunboss` (rather than `pgboss`). Everything else on Postgres —
 `SKIP LOCKED`, LISTEN/NOTIFY, advisory locks, covering indexes — is unaffected; only partitioning
-is turned off (all queues share one job table).
+is turned off. Because all queues then share one job table, the per-queue
+[`partition: true`](api/queues.md) option has no effect in prefix mode.
 
 **SQLite is always prefix** — it has no schemas — so this is simply how the SQLite backend works,
 and `tableIsolation: 'schema'` is rejected there.
+
+> **Keep namespaces distinct across installs in one database.** The LISTEN/NOTIFY channel and the
+> maintenance advisory lock are derived from the `schema` **name**, not the isolation mode. Two
+> bun-boss installs that share the same `schema` name in the same database — for example a
+> schema-mode `pgboss` and a prefix-mode `schema: 'pgboss'` — would share a NOTIFY channel and lock.
+> That only causes harmless cross-wakeups and serialized maintenance (never data corruption), but
+> give co-located installs different `schema` names to avoid it. The defaults (`pgboss` vs
+> `bunboss`) already differ.
 
 > **Upgrading from an earlier SQLite install:** the SQLite default namespace changed from `pgboss`
 > to `bunboss`. An existing SQLite database whose tables are `"pgboss.job"` must pass
