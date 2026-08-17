@@ -31,6 +31,35 @@ Each backend has a *kind* — `standard` (stock PostgreSQL) or `embedded` (in-pr
 can't end up with an inconsistent combination. The rest of this page explains each behavior (and
 names the internal flag it maps to, for anyone reading the source).
 
+## Table isolation
+
+`tableIsolation` controls **where** bun-boss's tables live, independently of the SQL dialect:
+
+| `tableIsolation` | Objects look like | Notes |
+|------------------|-------------------|-------|
+| `'schema'` *(default on Postgres/PGlite)* | `pgboss.job` | A dedicated Postgres schema; supports partitioning. |
+| `'prefix'` | `"bunboss.job"` | One quoted identifier per object in the connection's default schema (e.g. `public`), co-located with your own tables. No schema is created; **partitioning is disabled**. |
+
+```typescript
+// Keep bun-boss's tables in the default schema instead of a separate `pgboss` schema.
+const boss = new BunBoss({
+  url: 'postgresql://localhost:5432/appdb',
+  tableIsolation: 'prefix'   // creates "bunboss.job", "bunboss.queue", … in the default schema
+})
+```
+
+The `schema` option still names the namespace in both modes; in prefix mode it becomes the quoted
+prefix and defaults to `bunboss` (rather than `pgboss`). Everything else on Postgres —
+`SKIP LOCKED`, LISTEN/NOTIFY, advisory locks, covering indexes — is unaffected; only partitioning
+is turned off (all queues share one job table).
+
+**SQLite is always prefix** — it has no schemas — so this is simply how the SQLite backend works,
+and `tableIsolation: 'schema'` is rejected there.
+
+> **Upgrading from an earlier SQLite install:** the SQLite default namespace changed from `pgboss`
+> to `bunboss`. An existing SQLite database whose tables are `"pgboss.job"` must pass
+> `schema: 'pgboss'` to keep using them; otherwise bun-boss installs a fresh `"bunboss.*"` set.
+
 ## Database compatibility
 
 The matrix shows which PostgreSQL features each backend supports (✅). Where a feature isn't
@@ -343,7 +372,7 @@ await boss.send('email', { to: 'user@example.com' })
 `db` assert fires first, so a literal that omits both is rejected for the missing adapter.
 
 Because bun-boss's tables live in the **same database file** as your application's (namespaced by a
-quoted `"schema.table"` prefix), a job enqueued inside a transaction opened through the adapter's
+quoted `"schema.table"` prefix, `"bunboss.table"` by default — see [Table isolation](#table-isolation)), a job enqueued inside a transaction opened through the adapter's
 `withTransaction` (passed as the operation's `db`) commits atomically with your application
 writes — see [Database Adapters](api/adapters.md#sqlite-bun) for the pattern.
 
