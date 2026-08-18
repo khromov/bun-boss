@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/khromov/bun-boss/compare/bun-boss-v0.4.0...bun-boss-v0.5.0) (2026-08-18)
+
+
+### Features
+
+* export queue option defaults and make deadLetter clearable in updateQueue ([#50](https://github.com/khromov/bun-boss/issues/50)) ([807f232](https://github.com/khromov/bun-boss/commit/807f23261f66316a23346f3878be60fd5d61ae35))
+
 ## [0.4.0](https://github.com/khromov/bun-boss/compare/bun-boss-v0.3.0...bun-boss-v0.4.0) (2026-08-17)
 
 
