@@ -673,6 +673,12 @@ class Manager extends EventEmitter implements types.EventsMixin {
     return this.pendingOffWorkCleanups.size > 0
   }
 
+  // Join the parked offWork({ wait: false }) cleanups so shutdown never closes the pool out from
+  // under an in-flight handler's final completion write.
+  async settlePendingCleanups (): Promise<void> {
+    await Promise.allSettled([...this.pendingOffWorkCleanups])
+  }
+
   async offWork (name: string, options: types.OffWorkOptions = { wait: true }): Promise<void> {
     assert(name, 'queue name is required')
     assert(typeof name === 'string', 'queue name must be a string')
