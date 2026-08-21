@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/khromov/bun-boss/compare/bun-boss-v0.5.0...bun-boss-v0.5.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* settle worker cleanups before closing the pool on graceful stop ([#52](https://github.com/khromov/bun-boss/issues/52)) ([e6d1269](https://github.com/khromov/bun-boss/commit/e6d1269d72e9751c4ea947bc77ccc889f3440573))
+
 ## [0.5.0](https://github.com/khromov/bun-boss/compare/bun-boss-v0.4.0...bun-boss-v0.5.0) (2026-08-18)
 
 
