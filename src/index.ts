@@ -192,6 +192,11 @@ export class BunBoss extends EventEmitter<types.BunBossEventMap> {
       const shutdown = async () => {
         await this.#manager.failWip()
 
+        // failWip() only signals workers via abort(); their parked cleanups still await the
+        // in-flight handler, so join them before the pool closes or the late completion write
+        // queries a closed connection.
+        await this.#manager.settlePendingCleanups()
+
         if (this.#db._pgbdb && this.#db.opened && close) {
           await this.#db.close()
 
