@@ -484,6 +484,8 @@ export type {
   Request,
   Schedule,
   ScheduleOptions,
+  SettlableJob,
+  SettlableJobWithMetadata,
   SchedulingOptions,
   SendOptions,
   StopOptions,

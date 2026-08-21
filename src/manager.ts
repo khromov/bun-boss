@@ -230,19 +230,25 @@ class Manager extends EventEmitter implements types.EventsMixin {
   // (each output carried per-id via a JSON recordset), so batch size never drives the statement
   // count. Any batch job the handler omits (or returns with an invalid shape) is failed with a
   // descriptive error so it retries / dead-letters per queue config.
-  async #settlePerJob<T> (name: string, jobs: types.Job<T>[], result: unknown): Promise<number> {
+  async #settlePerJob<T> (name: string, jobs: types.Job<T>[], result: unknown, settled: Set<string>): Promise<number> {
+    // Jobs the handler already settled eagerly (job.complete()/job.fail()) are done: drop them so a
+    // returned-array entry for a settled id is ignored (the eager output wins) and the
+    // no-disposition default-fail below can never clobber an already-settled job.
+    const remaining = jobs.filter(job => !settled.has(job.id))
+    if (remaining.length === 0) return 0
+
     if (!Array.isArray(result)) {
       // The handler opted into perJobResults but did not return an array: a contract violation.
-      // Fail the whole batch so the mistake surfaces and the jobs are retried.
+      // Fail the still-unsettled jobs so the mistake surfaces and they are retried.
       const err = new Error('perJobResults handler must resolve with an array of job results')
-      await this.fail(name, jobs.map(job => job.id), err)
-      await this.#trackJobsFailed(name, jobs, err)
+      await this.fail(name, remaining.map(job => job.id), err)
+      await this.#trackJobsFailed(name, remaining, err)
       return 0
     }
 
-    // Index the handler's dispositions by job id, keeping only valid entries that reference a job
-    // from this batch. Last write wins on duplicate ids.
-    const batch = new Map(jobs.map(job => [job.id, job]))
+    // Index the handler's dispositions by job id, keeping only valid entries that reference a
+    // still-unsettled job from this batch. Last write wins on duplicate ids.
+    const batch = new Map(remaining.map(job => [job.id, job]))
     const disposition = new Map<string, types.JobResult>()
     for (const item of result as types.JobResult[]) {
       if (item && batch.has(item.id) && (item.status === 'completed' || item.status === 'failed' || item.status === 'deadletter')) {
@@ -250,12 +256,12 @@ class Manager extends EventEmitter implements types.EventsMixin {
       }
     }
 
-    // Partition the batch (the authoritative set of jobs) by disposition. `deadletter` jobs fail
-    // terminally and route straight to the dead letter queue, bypassing remaining retries.
+    // Partition the unsettled jobs by disposition. `deadletter` jobs fail terminally and route
+    // straight to the dead letter queue, bypassing remaining retries.
     const completed: { job: types.Job<T>, output: unknown }[] = []
     const failed: { job: types.Job<T>, output: unknown }[] = []
     const deadLettered: { job: types.Job<T>, output: unknown }[] = []
-    for (const job of jobs) {
+    for (const job of remaining) {
       const item = disposition.get(job.id)
       if (item?.status === 'completed') {
         completed.push({ job, output: item.output })
@@ -355,8 +361,39 @@ class Manager extends EventEmitter implements types.EventsMixin {
     // from under a still-running handler before the shared timer ever touches it.
     const heartbeatCandidates = jobs.map(j => j.heartbeatSeconds || 0).filter(s => s > 0)
     const heartbeatSeconds = heartbeatCandidates.length ? Math.min(...heartbeatCandidates) : 0
+    const settled = new Set<string>()
+    let finalized = false
+    let eagerCompleted = 0
+
     const ac = new AbortController()
     jobs.forEach(job => { job.signal = ac.signal })
+
+    if (perJobResults) {
+      // Each job can be settled eagerly the moment the handler finishes it, so a later batch
+      // timeout can only fail jobs still unsettled. The id is recorded synchronously (before the
+      // awaited write) so a concurrent second settle can't slip past the guard.
+      const assertSettlable = (id: string) => {
+        if (settled.has(id)) throw new Error(`job ${id} already settled`)
+        if (finalized) throw new Error(`cannot settle job ${id} after the batch handler finished`)
+      }
+      jobs.forEach(job => {
+        const settlable = job as types.SettlableJob<T>
+        settlable.complete = async (output?: unknown) => {
+          assertSettlable(job.id)
+          settled.add(job.id)
+          await this.#completeWithOutputs(name, [{ id: job.id, output }])
+          // Count toward the worker's burst-while-non-empty signal, like a returned `completed`.
+          eagerCompleted++
+          this.#trackJobsSettled(name, [{ job, output }], [])
+        }
+        settlable.fail = async (err: unknown) => {
+          assertSettlable(job.id)
+          settled.add(job.id)
+          await this.#failWithOutputs(name, [{ id: job.id, output: err }])
+          this.#trackJobsSettled(name, [], [{ job, output: err }])
+        }
+      })
+    }
 
     // Store AbortController on worker so it can be aborted after graceful shutdown
     if (worker) {
@@ -370,7 +407,8 @@ class Manager extends EventEmitter implements types.EventsMixin {
       const intervalMs = refreshSeconds * 1000
       heartbeatTimer = setInterval(async () => {
         try {
-          await this.touch(name, jobIds)
+          const live = jobIds.filter(id => !settled.has(id))
+          if (live.length) await this.touch(name, live)
         } catch (err) {
           this.emit(events.error, err)
         }
@@ -380,16 +418,20 @@ class Manager extends EventEmitter implements types.EventsMixin {
     let completedResult: unknown
     let completedAffected = 0
     let failedError: any
+    let failedJobs: types.Job<T>[] = jobs
     let didFail = false
     let settledCount = 0
 
     try {
       const result = await resolveWithinSeconds(callback(jobs), maxExpiration, `handler execution exceeded ${maxExpiration}s`, ac)
+      // The handler is done: no eager settle is accepted past this point, and #settlePerJob only
+      // touches jobs the handler did not already settle itself.
+      finalized = true
       if (perJobResults) {
         // #settlePerJob settles each job individually and does its own (synchronous,
         // lookup-free) spy tracking via #trackJobsSettled, so the deferred tracker below
         // is skipped for this path.
-        settledCount = await this.#settlePerJob(name, jobs, result)
+        settledCount = eagerCompleted + await this.#settlePerJob(name, jobs, result, settled)
       } else {
         const completion = await this.complete(name, jobIds, jobIds.length === 1 ? result : undefined)
         completedResult = result
@@ -397,9 +439,16 @@ class Manager extends EventEmitter implements types.EventsMixin {
         settledCount = jobs.length
       }
     } catch (err: any) {
-      await this.fail(name, jobIds, err)
+      finalized = true
+      // On a throw or batch timeout, fail only the jobs the handler did not already settle. An
+      // eagerly settled job is durably done and can never be undone by the batch timeout.
+      const unsettled = jobs.filter(job => !settled.has(job.id))
+      if (unsettled.length) await this.fail(name, unsettled.map(job => job.id), err)
       failedError = err
+      failedJobs = unsettled
       didFail = true
+      // Jobs completed eagerly before the throw/timeout still count toward the burst signal.
+      settledCount = eagerCompleted
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer)
       if (worker) {
@@ -415,7 +464,7 @@ class Manager extends EventEmitter implements types.EventsMixin {
     // inside the trackers stay as a safety net.
     if (this.config.__test__enableSpies) {
       if (didFail) {
-        await this.#trackJobsFailed(name, jobs, failedError)
+        await this.#trackJobsFailed(name, failedJobs, failedError)
       } else if (!perJobResults) {
         // perJobResults already tracked inside #settlePerJob; tracking again here would
         // double-record (and overwrite per-job outputs with the batch's slow-path lookup).

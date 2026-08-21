@@ -51,6 +51,23 @@ The default options for `work()` is 1 job every 2 seconds.
   - **Throwing** from the handler still fails the entire batch, exactly as without `perJobResults`. Use the returned array to express per-job failures; reserve throwing for batch-wide errors.
   - Resolving with anything other than an array is treated as a contract violation and fails the whole batch.
 
+  Each job handed to a `perJobResults` handler also carries `job.complete(output?)` and `job.fail(err)`, which settle that one job durably the moment they resolve — before the handler returns. This matters because the whole invocation is raced against the batch's shared time budget (the largest `expireInSeconds` in the batch): if the handler exceeds it, the returned-array path never runs and jobs that finished in-handler would otherwise be failed and re-run on retry. **An eagerly settled job can never be failed by the batch timeout** — the timeout only fails jobs not yet settled. Settle each job as you finish it, then return an empty array:
+
+  ```js
+  await boss.work('q', { batchSize: 5, perJobResults: true }, async (jobs) => {
+    for (const job of jobs) {
+      try {
+        await job.complete(await handle(job.data)) // durably settled NOW
+      } catch (err) {
+        await job.fail(err)
+      }
+    }
+    return [] // everything already settled; a timeout can only hit unsettled jobs
+  })
+  ```
+
+  `job.fail(err)` retries or dead-letters per the queue config, exactly like a `'failed'` array entry. Settling the same job twice, or settling after the handler has returned (or thrown/timed out), rejects. `deadletter` has no eager form — a handler that wants it simply leaves that job for the returned array.
+
 * **priority**, bool, *(default=true)*
 
   Same as in [`fetch()`](./jobs.md#fetchname-options)

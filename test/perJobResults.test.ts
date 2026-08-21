@@ -2,7 +2,8 @@ import { describe, it, expect } from './harness.ts'
 import * as helper from './testHelper.ts'
 import { assertTruthy } from './testHelper.ts'
 import { ctx } from './hooks.ts'
-import type { JobWithMetadata } from '../src/index.ts'
+import { delay } from '../src/tools.ts'
+import type { JobResult, JobWithMetadata } from '../src/index.ts'
 
 describe('perJobResults', function () {
   it('validates perJobResults must be a boolean', async function () {
@@ -447,6 +448,65 @@ describe('perJobResults', function () {
       assertTruthy(job)
       expect(job.state).toBe('completed')
     })
+
+    it('completes a job eagerly while another times out (split path)', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__noSkipLockedNoCte: true, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const doneId = await ctx.boss.send(ctx.schema, { role: 'complete' }, { retryLimit: 0, expireInSeconds: 1 })
+      const hangId = await ctx.boss.send(ctx.schema, { role: 'hang' }, { retryLimit: 0, expireInSeconds: 1 })
+      assertTruthy(doneId)
+      assertTruthy(hangId)
+
+      // Settle the fast job eagerly, then hang past the batch's shared expiry. The timeout can only
+      // fail the job that was never settled.
+      await ctx.boss.work(ctx.schema, { batchSize: 2, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        for (const job of jobs) {
+          if ((job.data as { role: string }).role === 'complete') await job.complete({ ok: true })
+        }
+        for (const job of jobs) {
+          if ((job.data as { role: string }).role === 'hang') await delay(3000)
+        }
+        return []
+      })
+
+      await spy.waitForJobWithId(doneId, 'completed')
+      await spy.waitForJobWithId(hangId, 'failed')
+
+      const done = await ctx.boss.getJobById(ctx.schema, doneId)
+      const hung = await ctx.boss.getJobById(ctx.schema, hangId)
+
+      assertTruthy(done)
+      expect(done.state).toBe('completed')
+      expect((done.output as { ok: boolean }).ok).toBe(true)
+
+      assertTruthy(hung)
+      expect(hung.state).toBe('failed')
+      expect((hung.output as { message: string }).message).toContain('handler execution exceeded')
+    })
+
+    it('preserves the Error output of an eager fail (split path)', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__noSkipLockedNoCte: true, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const jobId = await ctx.boss.send(ctx.schema, { key: 'payload' }, { retryLimit: 0 })
+      assertTruthy(jobId)
+
+      await ctx.boss.work(ctx.schema, { batchSize: 10, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        for (const job of jobs) await job.fail(new Error('eager boom'))
+        return []
+      })
+
+      await spy.waitForJobWithId(jobId, 'failed')
+
+      const job = await ctx.boss.getJobById(ctx.schema, jobId)
+      assertTruthy(job)
+      expect(job.state).toBe('failed')
+      const output = job.output as { name: string, message: string, stack: string }
+      expect(output.message).toBe('eager boom')
+      expect(output.name).toBe('Error')
+      expect(typeof output.stack).toBe('string')
+    })
   })
 
   // Mirror of the split block above. The standard (multi-mutation CTE) per-job settlement paths
@@ -514,6 +574,279 @@ describe('perJobResults', function () {
       const dlqWithMeta = await ctx.boss.getJobById(deadLetter, dlqJob.id)
       assertTruthy(dlqWithMeta)
       expect((dlqWithMeta.output as { message: string }).message).toBe('fatal, do not retry')
+    })
+
+    it('completes a job eagerly while another times out (standard path)', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__noSkipLockedNoCte: false, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const doneId = await ctx.boss.send(ctx.schema, { role: 'complete' }, { retryLimit: 0, expireInSeconds: 1 })
+      const hangId = await ctx.boss.send(ctx.schema, { role: 'hang' }, { retryLimit: 0, expireInSeconds: 1 })
+      assertTruthy(doneId)
+      assertTruthy(hangId)
+
+      await ctx.boss.work(ctx.schema, { batchSize: 2, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        for (const job of jobs) {
+          if ((job.data as { role: string }).role === 'complete') await job.complete({ ok: true })
+        }
+        for (const job of jobs) {
+          if ((job.data as { role: string }).role === 'hang') await delay(3000)
+        }
+        return []
+      })
+
+      await spy.waitForJobWithId(doneId, 'completed')
+      await spy.waitForJobWithId(hangId, 'failed')
+
+      const done = await ctx.boss.getJobById(ctx.schema, doneId)
+      const hung = await ctx.boss.getJobById(ctx.schema, hangId)
+
+      assertTruthy(done)
+      expect(done.state).toBe('completed')
+      expect((done.output as { ok: boolean }).ok).toBe(true)
+
+      assertTruthy(hung)
+      expect(hung.state).toBe('failed')
+      expect((hung.output as { message: string }).message).toContain('handler execution exceeded')
+    })
+
+    it('preserves the Error output of an eager fail (standard path)', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__noSkipLockedNoCte: false, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const jobId = await ctx.boss.send(ctx.schema, { key: 'payload' }, { retryLimit: 0 })
+      assertTruthy(jobId)
+
+      await ctx.boss.work(ctx.schema, { batchSize: 10, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        for (const job of jobs) await job.fail(new Error('eager boom'))
+        return []
+      })
+
+      await spy.waitForJobWithId(jobId, 'failed')
+
+      const job = await ctx.boss.getJobById(ctx.schema, jobId)
+      assertTruthy(job)
+      expect(job.state).toBe('failed')
+      const output = job.output as { name: string, message: string, stack: string }
+      expect(output.message).toBe('eager boom')
+      expect(output.name).toBe('Error')
+      expect(typeof output.stack).toBe('string')
+    })
+  })
+
+  // Eager per-job settlement: the handler durably settles each job via job.complete()/job.fail() as
+  // it finishes, so a batch timeout can only fail jobs that were never settled. These run under the
+  // current backend (both split and standard paths are pinned in the blocks above).
+  describe('eager settlement (job.complete / job.fail)', function () {
+    it('settles some jobs eagerly and the rest via the returned array', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const eagerId = await ctx.boss.send(ctx.schema, { mode: 'eager' }, { retryLimit: 0 })
+      const arrayId = await ctx.boss.send(ctx.schema, { mode: 'array' }, { retryLimit: 0 })
+      assertTruthy(eagerId)
+      assertTruthy(arrayId)
+
+      await ctx.boss.work(ctx.schema, { batchSize: 10, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        const results: JobResult[] = []
+        for (const job of jobs) {
+          if ((job.data as { mode: string }).mode === 'eager') {
+            await job.complete({ via: 'eager' })
+          } else {
+            results.push({ id: job.id, status: 'completed', output: { via: 'array' } })
+          }
+        }
+        return results
+      })
+
+      await spy.waitForJobWithId(eagerId, 'completed')
+      await spy.waitForJobWithId(arrayId, 'completed')
+
+      const eager = await ctx.boss.getJobById(ctx.schema, eagerId)
+      const array = await ctx.boss.getJobById(ctx.schema, arrayId)
+      assertTruthy(eager)
+      assertTruthy(array)
+      expect(eager.state).toBe('completed')
+      expect((eager.output as { via: string }).via).toBe('eager')
+      expect(array.state).toBe('completed')
+      expect((array.output as { via: string }).via).toBe('array')
+    })
+
+    it('ignores a returned-array entry for an already eagerly-settled job', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const jobId = await ctx.boss.send(ctx.schema, { key: 'payload' }, { retryLimit: 0 })
+      assertTruthy(jobId)
+
+      await ctx.boss.work(ctx.schema, { batchSize: 10, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        await jobs[0]!.complete({ via: 'eager' })
+        // The array also reports the same job as failed; the eager completion must win.
+        return jobs.map(job => ({ id: job.id, status: 'failed' as const, output: new Error('array override') }))
+      })
+
+      await spy.waitForJobWithId(jobId, 'completed')
+
+      const job = await ctx.boss.getJobById(ctx.schema, jobId)
+      assertTruthy(job)
+      expect(job.state).toBe('completed')
+      expect((job.output as { via: string }).via).toBe('eager')
+    })
+
+    it('fails only the unsettled jobs when the handler throws after settling some', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const settledId = await ctx.boss.send(ctx.schema, { role: 'settle' }, { retryLimit: 0 })
+      const unsettledId = await ctx.boss.send(ctx.schema, { role: 'throw' }, { retryLimit: 0 })
+      assertTruthy(settledId)
+      assertTruthy(unsettledId)
+
+      await ctx.boss.work(ctx.schema, { batchSize: 2, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        for (const job of jobs) {
+          if ((job.data as { role: string }).role === 'settle') await job.complete({ ok: true })
+        }
+        throw new Error('handler boom')
+      })
+
+      await spy.waitForJobWithId(settledId, 'completed')
+      await spy.waitForJobWithId(unsettledId, 'failed')
+
+      const settled = await ctx.boss.getJobById(ctx.schema, settledId)
+      const unsettled = await ctx.boss.getJobById(ctx.schema, unsettledId)
+      assertTruthy(settled)
+      assertTruthy(unsettled)
+      expect(settled.state).toBe('completed')
+      expect((settled.output as { ok: boolean }).ok).toBe(true)
+      expect(unsettled.state).toBe('failed')
+      expect((unsettled.output as { message: string }).message).toBe('handler boom')
+    })
+
+    it('rejects a second settle of the same job', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__enableSpies: true })
+
+      const jobId = await ctx.boss.send(ctx.schema, { key: 'payload' }, { retryLimit: 0 })
+      assertTruthy(jobId)
+
+      const holder: { error: Error | null } = { error: null }
+      let markDone = (): void => {}
+      const handlerDone = new Promise<void>(resolve => { markDone = resolve })
+      await ctx.boss.work(ctx.schema, { batchSize: 10, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        const job = jobs[0]!
+        await job.complete({ ok: true })
+        try {
+          await job.complete({ ok: false })
+        } catch (err) {
+          holder.error = err as Error
+        }
+        markDone()
+        return []
+      })
+
+      await handlerDone
+      assertTruthy(holder.error)
+      expect(holder.error.message).toContain('already settled')
+
+      const job = await ctx.boss.getJobById(ctx.schema, jobId)
+      assertTruthy(job)
+      expect(job.state).toBe('completed')
+      expect((job.output as { ok: boolean }).ok).toBe(true)
+    })
+
+    it('rejects an eager settle after the batch handler finished', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const jobId = await ctx.boss.send(ctx.schema, { key: 'payload' }, { retryLimit: 0 })
+      assertTruthy(jobId)
+
+      const holder: { settle: (() => Promise<void>) | null } = { settle: null }
+      await ctx.boss.work(ctx.schema, { batchSize: 10, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        const job = jobs[0]!
+        holder.settle = () => job.complete({ ok: true })
+        return [{ id: job.id, status: 'completed' as const, output: { ok: true } }]
+      })
+
+      await spy.waitForJobWithId(jobId, 'completed')
+      assertTruthy(holder.settle)
+      await expect(holder.settle()).rejects.toThrow('after the batch handler finished')
+    })
+
+    it('changes no job state when every job was settled before a handler timeout', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const aId = await ctx.boss.send(ctx.schema, { n: 1 }, { retryLimit: 0, expireInSeconds: 1 })
+      const bId = await ctx.boss.send(ctx.schema, { n: 2 }, { retryLimit: 0, expireInSeconds: 1 })
+      assertTruthy(aId)
+      assertTruthy(bId)
+
+      // Settle both jobs, then hang past expiry. The timeout fires but has nothing unsettled to fail.
+      await ctx.boss.work(ctx.schema, { batchSize: 2, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        for (const job of jobs) await job.complete({ n: (job.data as { n: number }).n })
+        await delay(3000)
+        return []
+      })
+
+      await spy.waitForJobWithId(aId, 'completed')
+      await spy.waitForJobWithId(bId, 'completed')
+
+      // Let the batch timeout (maxExpiration = 1s) fire, then prove it changed nothing.
+      await delay(1500)
+
+      const a = await ctx.boss.getJobById(ctx.schema, aId)
+      const b = await ctx.boss.getJobById(ctx.schema, bId)
+      assertTruthy(a)
+      assertTruthy(b)
+      expect(a.state).toBe('completed')
+      expect((a.output as { n: number }).n).toBe(1)
+      expect(a.retryCount).toBe(0)
+      expect(b.state).toBe('completed')
+      expect((b.output as { n: number }).n).toBe(2)
+      expect(b.retryCount).toBe(0)
+    })
+
+    it('retries an eager fail per queue config and settles on the retry', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const jobId = await ctx.boss.send(ctx.schema, { key: 'payload' }, { retryLimit: 1, retryDelay: 0 })
+      assertTruthy(jobId)
+
+      let attempts = 0
+      await ctx.boss.work(ctx.schema, { batchSize: 10, perJobResults: true, pollingIntervalSeconds: 0.5 }, async jobs => {
+        attempts++
+        const job = jobs[0]!
+        if (attempts === 1) await job.fail(new Error('transient'))
+        else await job.complete({ ok: true })
+        return []
+      })
+
+      await spy.waitForJobWithId(jobId, 'failed')
+      await spy.waitForJobWithId(jobId, 'completed')
+
+      const job = await ctx.boss.getJobById(ctx.schema, jobId)
+      assertTruthy(job)
+      expect(job.state).toBe('completed')
+      expect(job.retryCount).toBe(1)
+      expect((job.output as { ok: boolean }).ok).toBe(true)
+    })
+
+    it('attaches no complete/fail to jobs without perJobResults', async function () {
+      ctx.boss = await helper.start({ ...ctx.bossConfig, __test__enableSpies: true })
+      const spy = ctx.boss.getSpy(ctx.schema)
+
+      const jobId = await ctx.boss.send(ctx.schema, { key: 'payload' }, { retryLimit: 0 })
+      assertTruthy(jobId)
+
+      let sawMethods = true
+      await ctx.boss.work(ctx.schema, { batchSize: 10, pollingIntervalSeconds: 0.5 }, async jobs => {
+        const job = jobs[0]! as { complete?: unknown, fail?: unknown }
+        sawMethods = job.complete !== undefined || job.fail !== undefined
+      })
+
+      await spy.waitForJobWithId(jobId, 'completed')
+      expect(sawMethods).toBe(false)
     })
   })
 })
